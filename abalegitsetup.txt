@@ -1,0 +1,2928 @@
+local AIRFLOW_SRC = "https://raw.githubusercontent.com/PookiePepelsss/Airflow-UI/refs/heads/main/Source.luau"
+
+local ok, Airflow = pcall(function()
+	return loadstring(game:HttpGet(AIRFLOW_SRC))()
+end)
+
+if not ok or type(Airflow) ~= "table" or not Airflow.CreateWindow then
+	game:GetService("StarterGui"):SetCore("SendNotification", {
+		Title = "outlaw.dev",
+		Text = "Airflow failed: " .. tostring(Airflow),
+		Duration = 10,
+	})
+	return
+end
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local VirtualInput      = game:GetService("VirtualInputManager")
+local Debris            = game:GetService("Debris")
+local TeleportService   = game:GetService("TeleportService")
+local HttpService       = game:GetService("HttpService")
+local StarterGui        = game:GetService("StarterGui")
+
+local LP = Players.LocalPlayer
+
+local GUI_NAMES = { "OutlawBlockBuilder", "OutlawPlayerBlockBuilder", "OutlawVisualizer" }
+for _, root in ipairs({ gethui and gethui() or nil, game:GetService("CoreGui"), LP:FindFirstChild("PlayerGui") }) do
+	if root then
+		for _, name in ipairs(GUI_NAMES) do
+			local inst = root:FindFirstChild(name)
+			if inst then pcall(function() inst:Destroy() end) end
+		end
+	end
+end
+
+local State = {
+	autoBlock       = false,
+	blockRange      = 25,
+	blockHold       = 0.20,
+	pingComp        = true,
+	pingCompMs      = 50,
+
+	trade           = false,
+	tradeDelay      = 0.04,
+	tradeWindow     = 0.05,
+	tradeHitGap     = 0.12,
+	tradeHits       = 2,
+	lastTradeAt     = 0,
+
+	blockEndThread  = nil,
+	blockHoldUntil  = 0,
+
+	headRide        = false,
+	headRideTarget  = nil,
+	headRideConn    = nil,
+	headRideOffset  = 3,
+	headRideDur     = 1.5,
+	headRideEnd     = 0,
+	headRideAlpha   = 0.35,
+	headRidePending = false,
+	myAnimConn      = nil,
+
+	farm            = false,
+	farmPosMode     = "On Top",
+	farmRange       = 30,
+	farmM1Delay     = 0.08,
+	farmSkillDelay  = 0.4,
+	farmRotation    = { "1", "2", "3", "4" },
+	farmRotIndex    = 1,
+	farmTeamCheck   = true,
+	farmTarget      = nil,
+	farmConn        = nil,
+	farmM1Thread    = nil,
+	farmSkillThread = nil,
+
+	nanami          = false,
+	nanamiTol       = 0.005,
+	nanamiFired     = false,
+	nanamiConn      = nil,
+
+	yuji            = false,
+	yujiMode        = "Virtual Attack",
+	yujiThreshold   = 43.3,
+	yujiEnter       = 40,
+	yujiReset       = 50,
+	yujiChanged     = false,
+	yujiFired       = false,
+	yujiConn        = nil,
+	yujiKey         = Enum.KeyCode.Two,
+	yujiKeyDelay    = 0.6,
+	yujiKeyConn     = nil,
+
+	speed           = false,
+	speedVal        = 64,
+	speedConn       = nil,
+	fly             = false,
+	flyVal          = 100,
+	flyBV           = nil,
+	flyConn         = nil,
+	infJump         = false,
+	infJumpPower    = 50,
+	infJumpConn     = nil,
+
+	lock            = false,
+	lockRange       = 50,
+	lockConn        = nil,
+	forcedLock      = nil,
+
+	autoRejoin      = false,
+	rejoinConn      = nil,
+
+	hookDummies     = true,
+	hookPlayers     = true,
+}
+
+local hooked        = {}
+local logHooked     = {}
+local myLogHooked   = {}
+local timingRowDots = {}
+
+local Logger = {
+	range    = 120,
+	win      = nil,
+	scroll   = nil,
+	title    = nil,
+	rows     = {},
+}
+
+local MyLogger = {
+	range    = 120,
+	win      = nil,
+	scroll   = nil,
+	title    = nil,
+	rows     = {},
+}
+
+local Visualizer = {
+	currentId    = nil,
+	track        = nil,
+	duration     = 0,
+	speed        = 1,
+	paused       = false,
+	looping      = true,
+	pausedTime   = 0,
+	rig          = nil,
+	hum          = nil,
+	world        = nil,
+	viewport     = nil,
+	camera       = nil,
+	gui          = nil,
+	frame        = nil,
+	pendingId    = nil,
+}
+
+local animTimings = {}
+local TIMING_FILE = "outlaw_anim_timings.json"
+
+local atkIds = {
+	["rbxassetid://1461128166"]      = true,
+	["rbxassetid://1461128859"]      = true,
+	["rbxassetid://1461136273"]      = true,
+	["rbxassetid://1461136875"]      = true,
+	["rbxassetid://112361413535373"] = true,
+	["rbxassetid://1461252313"]      = true,
+	["rbxassetid://1470447472"]      = true,
+	["rbxassetid://1470449816"]      = true,
+	["rbxassetid://1470439852"]      = true,
+	["rbxassetid://1470422387"]      = true,
+	["rbxassetid://6310220913"]      = true,
+}
+
+local comboEndIds = {
+	["rbxassetid://1461145506"] = true,
+	["rbxassetid://1461137417"] = true,
+}
+
+local HEAD_RIDE_ANIM = "rbxassetid://1461137417"
+
+local LOCO_NAMES = {
+	WalkAnim = true, JumpAnim = true, RunAnim = true, SwimAnim = true,
+	IdleAnim = true, FallAnim = true, SwimIdleAnim = true, ClimbAnim = true,
+	Walk = true, Jump = true, Run = true, Swim = true,
+	Idle = true, Fall = true, SwimIdle = true, Climb = true,
+	Walking = true, Jumping = true, Running = true, Swimming = true,
+	Idling = true, Falling = true, SwimIdling = true, Climbing = true,
+	walk = true, jump = true, run = true, swim = true,
+	idle = true, fall = true, climb = true,
+}
+
+local LOCO_IDS = {
+	"507766", "507777", "507797",
+	"180435571", "180435792",
+	"125750702", "125749238",
+	"180436148", "180436334",
+	"125751086", "125750609",
+	"180436552", "180436678",
+	"507771019", "507770818",
+	"507767714", "507768375",
+	"507770239", "507770453",
+}
+
+local function isLocomotion(id, name)
+	if name and LOCO_NAMES[name] then return true end
+	for _, frag in ipairs(LOCO_IDS) do
+		if id:find(frag) then return true end
+	end
+	return false
+end
+
+local function loadTimings()
+	local okRead, data = pcall(readfile, TIMING_FILE)
+	if not okRead or not data or data == "" then return end
+	local okDecode, decoded = pcall(function() return HttpService:JSONDecode(data) end)
+	if okDecode and type(decoded) == "table" then
+		animTimings = decoded
+	end
+end
+
+local function saveTimings()
+	pcall(function()
+		writefile(TIMING_FILE, HttpService:JSONEncode(animTimings))
+	end)
+end
+
+local function refreshRowDots()
+	for id, dot in pairs(timingRowDots) do
+		if dot and dot.Parent then
+			dot.BackgroundColor3 = animTimings[id]
+				and Color3.fromRGB(80, 220, 120)
+				or  Color3.fromRGB(70, 70, 70)
+		end
+	end
+end
+
+local function getInput()
+	local bp = LP:FindFirstChild("Backpack")
+	if bp then
+		local inp = bp:FindFirstChild("Input")
+		if inp and inp:IsA("RemoteEvent") then return inp end
+	end
+
+	local char = LP.Character
+	if char then
+		local traits = char:FindFirstChild("ServerTraits")
+		if traits then
+			local inp = traits:FindFirstChild("Input")
+			if inp and inp:IsA("RemoteEvent") then return inp end
+		end
+	end
+
+	local bpTraits = bp and bp:FindFirstChild("ServerTraits")
+	if bpTraits then
+		local inp = bpTraits:FindFirstChild("Input")
+		if inp and inp:IsA("RemoteEvent") then return inp end
+	end
+
+	for _, v in ipairs(LP:GetDescendants()) do
+		if v:IsA("RemoteEvent") and v.Name == "Input" then
+			return v
+		end
+	end
+
+	return nil
+end
+
+local function isTeammate(model)
+	if not State.farmTeamCheck then return false end
+	if not LP.Team then return false end
+	local plr = Players:GetPlayerFromCharacter(model)
+	if not plr or not plr.Team then return false end
+	return plr.Team == LP.Team
+end
+
+local function nearestTarget()
+	local myChar = LP.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+
+	local best, bestDist = nil, math.huge
+	for hum in pairs(hooked) do
+		local model = hum.Parent
+		if model and model.Parent and model ~= myChar
+			and not isTeammate(model) and hum.Health > 0 then
+			local root = model:FindFirstChild("HumanoidRootPart")
+			if root then
+				local dist = (myRoot.Position - root.Position).Magnitude
+				if dist < bestDist then
+					best, bestDist = root, dist
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function virtualClick()
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+	local x = math.floor(vp.X * 0.5)
+	local y = math.floor(vp.Y * 0.5)
+	VirtualInput:SendMouseButtonEvent(x, y, 0, true, game, 0)
+	task.wait(0.02)
+	VirtualInput:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+local function fireM1()
+	local input = getInput()
+	if not input then return end
+
+	local char = LP.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local cam = workspace.CurrentCamera
+	local target = nearestTarget()
+
+	local hitPos, lookDir
+	if target then
+		hitPos = target.Position
+		lookDir = target.Position - (root and root.Position or cam.CFrame.Position)
+		lookDir = lookDir.Magnitude > 0 and lookDir.Unit or cam.CFrame.LookVector
+	elseif cam then
+		local origin = root and root.Position or cam.CFrame.Position
+		lookDir = cam.CFrame.LookVector
+		hitPos = origin + lookDir * 10
+	else
+		hitPos = root and (root.Position + root.CFrame.LookVector * 10) or Vector3.new()
+		lookDir = root and root.CFrame.LookVector or Vector3.new(0, 0, -1)
+	end
+
+	local mouseHit = CFrame.new(hitPos, hitPos + lookDir)
+	local down = { "M1", { air = false, md = Vector3.new(), mousehit = mouseHit, skeydown = true, skeyreal = false } }
+	local up   = { "M1", { air = false, md = Vector3.new(), mousehit = mouseHit, skeydown = false, skeyreal = true } }
+
+	pcall(function() input:FireServer(unpack(down)) end)
+	task.wait(0.05)
+	pcall(function() input:FireServer(unpack(up)) end)
+end
+
+local KEYCODE_FOR = {
+	["1"] = Enum.KeyCode.One,
+	["2"] = Enum.KeyCode.Two,
+	["3"] = Enum.KeyCode.Three,
+	["4"] = Enum.KeyCode.Four,
+	["5"] = Enum.KeyCode.Five,
+}
+
+local function fireSkillKey(keyName)
+	local kc = KEYCODE_FOR[keyName] or Enum.KeyCode.One
+	pcall(function()
+		VirtualInput:SendKeyEvent(true, kc, false, game)
+		task.wait(0.05)
+		VirtualInput:SendKeyEvent(false, kc, false, game)
+	end)
+end
+
+local function fireNextFarmSkill()
+	local key = State.farmRotation[State.farmRotIndex]
+	if key then fireSkillKey(key) end
+	State.farmRotIndex = State.farmRotIndex % #State.farmRotation + 1
+end
+
+local function fireSkillByMode()
+	if State.yujiMode == "In-Game M1" then
+		fireM1()
+	elseif State.yujiMode == "Virtual Attack" then
+		virtualClick()
+	elseif State.yujiMode == "UseMove Remote" then
+		fireSkillKey("2")
+	end
+end
+
+local function stopHeadRide()
+	State.headRideTarget = nil
+	State.headRideEnd = 0
+	State.headRidePending = false
+	if State.headRideConn then
+		pcall(function() State.headRideConn:Disconnect() end)
+		State.headRideConn = nil
+	end
+end
+
+local function startHeadRide(hum)
+	if not State.headRide then return end
+	if State.headRideTarget == hum then return end
+
+	State.headRideTarget = hum
+	State.headRideEnd = tick() + State.headRideDur
+
+	if State.headRideConn then
+		State.headRideConn:Disconnect()
+		State.headRideConn = nil
+	end
+
+	State.headRideConn = RunService.RenderStepped:Connect(function(dt)
+		if not State.headRide or tick() >= State.headRideEnd then
+			stopHeadRide()
+			return
+		end
+
+		local model = hum and hum.Parent
+		if not model or not model.Parent then stopHeadRide() return end
+
+		local myChar = LP.Character
+		local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+		local theirHead = model:FindFirstChild("Head")
+		if not myRoot or not theirHead then stopHeadRide() return end
+
+		if theirHead.AssemblyLinearVelocity.Y < -60 then stopHeadRide() return end
+
+		local targetCF = theirHead.CFrame * CFrame.new(0, State.headRideOffset, 0)
+		local alpha = 1 - math.exp(-dt / math.max(State.headRideAlpha, 1e-4))
+		myRoot.CFrame = myRoot.CFrame:Lerp(targetCF, alpha)
+		myRoot.AssemblyLinearVelocity = Vector3.new()
+	end)
+end
+
+local function waitForHitThenRide()
+	if not State.headRide or State.headRidePending then return end
+	State.headRidePending = true
+
+	local char = LP.Character
+	local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+	if not myRoot then
+		State.headRidePending = false
+		return
+	end
+
+	local best, bestDist = nil, math.huge
+	for hum in pairs(hooked) do
+		local model = hum.Parent
+		if model and model.Parent and model ~= char then
+			local root = model:FindFirstChild("HumanoidRootPart")
+			if root then
+				local dist = (root.Position - myRoot.Position).Magnitude
+				if dist < bestDist then
+					best, bestDist = hum, dist
+				end
+			end
+		end
+	end
+
+	if not best then
+		State.headRidePending = false
+		return
+	end
+
+	local targetModel = best.Parent
+	local startHealth = best.Health
+	local startTags = {}
+	for _, c in ipairs(targetModel:GetChildren()) do
+		startTags[c.Name] = true
+	end
+
+	local startTime = tick()
+	local conn
+	conn = RunService.Heartbeat:Connect(function()
+		if not State.headRide or tick() - startTime > 0.6 then
+			conn:Disconnect()
+			State.headRidePending = false
+			return
+		end
+
+		local hum = targetModel:FindFirstChildOfClass("Humanoid")
+		if not hum then
+			conn:Disconnect()
+			State.headRidePending = false
+			return
+		end
+
+		local hit = hum.Health < startHealth
+		if not hit then
+			for _, c in ipairs(targetModel:GetChildren()) do
+				if not startTags[c.Name] then
+					local n = c.Name:lower()
+					if n:find("hit") or n:find("stun") or n:find("slam")
+						or n:find("ragdoll") or n:find("got") then
+						hit = true
+						break
+					end
+				end
+			end
+		end
+
+		if hit then
+			conn:Disconnect()
+			State.headRidePending = false
+			startHeadRide(hum)
+		end
+	end)
+end
+
+local function hookMyAnimator()
+	if State.myAnimConn then
+		pcall(function() State.myAnimConn:Disconnect() end)
+		State.myAnimConn = nil
+	end
+
+	local char = LP.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	State.myAnimConn = animator.AnimationPlayed:Connect(function(track)
+		if not State.headRide then return end
+		local id = track.Animation and track.Animation.AnimationId
+		if id == HEAD_RIDE_ANIM then
+			waitForHitThenRide()
+		end
+	end)
+end
+
+local function blockPulse(duration)
+	local input = getInput()
+	if not input then return end
+
+	local now = tick()
+	local newEnd = now + duration
+
+	if State.blockEndThread and State.blockHoldUntil > now and newEnd <= State.blockHoldUntil then
+		return
+	end
+
+	if State.blockEndThread then
+		pcall(task.cancel, State.blockEndThread)
+		State.blockEndThread = nil
+	end
+
+	pcall(function() input:FireServer("BlockOn") end)
+	State.blockHoldUntil = newEnd
+
+	State.blockEndThread = task.delay(duration, function()
+		local i = getInput()
+		if i then pcall(function() i:FireServer("BlockOff") end) end
+		State.blockEndThread = nil
+		State.blockHoldUntil = 0
+	end)
+end
+
+local function onAttack(animId)
+	if not State.autoBlock and not State.trade then return end
+
+	local timing       = animId and animTimings[animId] or nil
+	local hasBlockTime = timing and timing.block ~= nil
+	local hasTradeTime = timing and timing.trade ~= nil
+	local ping         = State.pingComp and State.pingCompMs / 1000 or 0
+
+	if State.autoBlock then
+		if hasBlockTime then
+			blockPulse(timing.block + ping)
+		else
+			blockPulse(State.blockHold + ping)
+		end
+	end
+
+	if State.trade then
+		local now = tick()
+		if now - State.lastTradeAt < State.tradeWindow then return end
+		State.lastTradeAt = now
+
+		task.spawn(function()
+			local waitTime = hasTradeTime
+				and (timing.trade + State.tradeDelay)
+				or  (State.blockHold + ping + State.tradeDelay)
+			task.wait(waitTime)
+
+			for i = 1, State.tradeHits do
+				if not State.trade then break end
+				fireM1()
+				if i < State.tradeHits then task.wait(State.tradeHitGap) end
+			end
+		end)
+	end
+end
+
+local function farmPositionCFrame(targetRoot)
+	local pos  = targetRoot.Position
+	local look = targetRoot.CFrame.LookVector
+
+	if State.farmPosMode == "On Top"   then return CFrame.new(pos + Vector3.new(0, 4, 0)) end
+	if State.farmPosMode == "Below"    then return CFrame.new(pos - Vector3.new(0, 4, 0)) end
+	if State.farmPosMode == "Behind"   then return CFrame.new(pos - look * 4, pos) end
+	if State.farmPosMode == "In Front" then return CFrame.new(pos + look * 4, pos) end
+	return CFrame.new(pos)
+end
+
+local function farmLoop()
+	if State.farmConn then State.farmConn:Disconnect() State.farmConn = nil end
+	if State.farmM1Thread then task.cancel(State.farmM1Thread) State.farmM1Thread = nil end
+	if State.farmSkillThread then task.cancel(State.farmSkillThread) State.farmSkillThread = nil end
+
+	State.farmRotIndex = 1
+
+	State.farmConn = RunService.Heartbeat:Connect(function()
+		if not State.farm then
+			if State.farmConn then State.farmConn:Disconnect() State.farmConn = nil end
+			return
+		end
+
+		local char = LP.Character
+		local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+		if not myRoot then return end
+
+		local best, bestDist = nil, State.farmRange
+		for hum in pairs(hooked) do
+			local model = hum.Parent
+			if model and model.Parent and model ~= char and not isTeammate(model) then
+				local root = model:FindFirstChild("HumanoidRootPart")
+				local h    = model:FindFirstChildOfClass("Humanoid")
+				if root and h and h.Health > 0 then
+					local dist = (root.Position - myRoot.Position).Magnitude
+					if dist < bestDist then
+						best, bestDist = hum, dist
+					end
+				end
+			end
+		end
+
+		if not best then
+			State.farmTarget = nil
+			State.forcedLock = nil
+			return
+		end
+
+		State.farmTarget = best
+		local targetRoot = best.Parent:FindFirstChild("HumanoidRootPart")
+		if not targetRoot then return end
+
+		State.forcedLock = targetRoot
+		myRoot.CFrame = farmPositionCFrame(targetRoot)
+		myRoot.AssemblyLinearVelocity = Vector3.new()
+	end)
+
+	State.farmM1Thread = task.spawn(function()
+		while State.farm do
+			if State.farmTarget and State.farmTarget.Parent then
+				fireM1()
+				task.wait(State.farmM1Delay)
+			else
+				task.wait(0.05)
+			end
+		end
+	end)
+
+	State.farmSkillThread = task.spawn(function()
+		while State.farm do
+			if State.farmTarget and State.farmTarget.Parent then
+				fireNextFarmSkill()
+			end
+			task.wait(State.farmSkillDelay)
+		end
+	end)
+end
+
+local function hookHumanoid(hum)
+	if not hum or not hum:IsA("Humanoid") or hooked[hum] then return end
+
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		task.spawn(function()
+			local waited = 0
+			while hum.Parent and not animator and waited < 5 do
+				task.wait(0.1)
+				waited += 0.1
+				animator = hum:FindFirstChildOfClass("Animator")
+			end
+			if animator then hookHumanoid(hum) end
+		end)
+		return
+	end
+
+	hooked[hum] = true
+	local model = hum.Parent
+
+	local conn = animator.AnimationPlayed:Connect(function(track)
+		if not model or not model.Parent then return end
+
+		local id = track.Animation and track.Animation.AnimationId
+		if not id then return end
+		if comboEndIds[id] then return end
+		if not atkIds[id] and not animTimings[id] then return end
+		if not State.autoBlock and not State.trade then return end
+
+		local myChar = LP.Character
+		local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+		local theirRoot = model:FindFirstChild("HumanoidRootPart")
+		if not myRoot or not theirRoot then return end
+		if (myRoot.Position - theirRoot.Position).Magnitude > State.blockRange then return end
+
+		onAttack(id)
+	end)
+
+	local ancestryConn
+	ancestryConn = hum.AncestryChanged:Connect(function(_, parent)
+		if parent then return end
+		pcall(function() conn:Disconnect() end)
+		pcall(function() ancestryConn:Disconnect() end)
+		hooked[hum] = nil
+	end)
+
+	hum.ChildAdded:Connect(function(c)
+		if c:IsA("Animator") then
+			hooked[hum] = nil
+			hookHumanoid(hum)
+		end
+	end)
+
+	hum.ChildRemoved:Connect(function(c)
+		if c:IsA("Animator") then
+			hooked[hum] = nil
+			hookHumanoid(hum)
+		end
+	end)
+end
+
+local function hookLive()
+	if not State.hookDummies then return end
+	local live = workspace:FindFirstChild("Live")
+	if not live then return end
+	for _, c in ipairs(live:GetChildren()) do
+		if c:IsA("Model") then
+			local h = c:FindFirstChildOfClass("Humanoid")
+			if h then hookHumanoid(h) end
+		end
+	end
+end
+
+local function hookPlayersFunc()
+	if not State.hookPlayers then return end
+	local myChar = LP.Character
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LP then
+			local c = plr.Character
+			if c and c ~= myChar then
+				local h = c:FindFirstChildOfClass("Humanoid")
+				if h then hookHumanoid(h) end
+			end
+		end
+	end
+end
+
+local function scanAll()
+	local myChar = LP.Character
+	for _, o in ipairs(workspace:GetDescendants()) do
+		if o:IsA("Humanoid") and not (o.Parent and myChar and o.Parent == myChar) then
+			hookHumanoid(o)
+		end
+	end
+end
+
+local HookConns = {}
+local function startHooks()
+	hookLive()
+	hookPlayersFunc()
+	scanAll()
+
+	local live = workspace:FindFirstChild("Live")
+	if live then
+		HookConns.live = live.ChildAdded:Connect(function(c)
+			if not State.autoBlock and not State.trade and not State.headRide and not State.farm then return end
+			if not State.hookDummies then return end
+			if c:IsA("Model") then
+				local h = c:FindFirstChildOfClass("Humanoid")
+				if h then hookHumanoid(h) end
+			end
+		end)
+	end
+
+	HookConns.descendant = workspace.DescendantAdded:Connect(function(o)
+		if not State.autoBlock and not State.trade and not State.headRide and not State.farm then return end
+		if o:IsA("Humanoid") then
+			local mc = LP.Character
+			if not (o.Parent and mc and o.Parent == mc) then hookHumanoid(o) end
+		elseif o:IsA("Animator") then
+			local h = o.Parent
+			if h and h:IsA("Humanoid") then hookHumanoid(h) end
+		end
+	end)
+
+	HookConns.playerAdded = Players.PlayerAdded:Connect(function(plr)
+		plr.CharacterAdded:Connect(function(c)
+			if not State.autoBlock and not State.trade and not State.headRide and not State.farm then return end
+			if not State.hookPlayers then return end
+			local h = c:WaitForChild("Humanoid", 5)
+			if h then hookHumanoid(h) end
+		end)
+	end)
+end
+
+local function stopHooks()
+	for k, conn in pairs(HookConns) do
+		pcall(function() conn:Disconnect() end)
+		HookConns[k] = nil
+	end
+end
+
+local cachedBar, cachedBarOwner
+local function findBar()
+	local char = LP.Character
+	if cachedBar and cachedBarOwner == char and cachedBar.Parent then
+		local cut  = cachedBar:FindFirstChild("Cutter")
+		local goal = cachedBar:FindFirstChild("Goal")
+		if cut and goal then return cut, goal end
+	end
+
+	local live = workspace:FindFirstChild("Live")
+	if not live then return nil end
+
+	for _, c in ipairs(live:GetChildren()) do
+		local hrp = c:FindFirstChild("HumanoidRootPart")
+		local gui = hrp and hrp:FindFirstChild("NanamiCutGUI")
+		local bar = gui and gui:FindFirstChild("MainBar")
+		if bar then
+			local cut  = bar:FindFirstChild("Cutter")
+			local goal = bar:FindFirstChild("Goal")
+			if cut and goal then
+				cachedBar = bar
+				cachedBarOwner = char
+				return cut, goal
+			end
+		end
+	end
+
+	return nil
+end
+
+local function nanamiTick()
+	if not State.nanami or State.nanamiFired then return end
+
+	local char = LP.Character
+	if not char or char:GetAttribute("NANAMIAIM") ~= true then return end
+
+	local cut, goal = findBar()
+	if not cut or not goal then return end
+
+	if math.abs(cut.Position.X.Scale - goal.Position.X.Scale) <= State.nanamiTol then
+		virtualClick()
+		State.nanamiFired = true
+	end
+end
+
+local function bindNanamiChar(c)
+	if not c then return end
+	c:GetAttributeChangedSignal("NANAMIAIM"):Connect(function()
+		State.nanamiFired = false
+		cachedBar = nil
+		cachedBarOwner = nil
+	end)
+end
+
+local function yujiTick()
+	if not State.yuji then return end
+
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+
+	local fov = cam.FieldOfView
+	if fov < State.yujiEnter then State.yujiChanged = true end
+
+	if State.yujiChanged and not State.yujiFired and fov >= State.yujiThreshold then
+		fireSkillByMode()
+		State.yujiFired = true
+	end
+
+	if fov > State.yujiReset or fov < State.yujiEnter - 5 then
+		State.yujiChanged = false
+		State.yujiFired = false
+	end
+end
+
+local function hookYujiKey()
+	if State.yujiKeyConn then
+		pcall(function() State.yujiKeyConn:Disconnect() end)
+		State.yujiKeyConn = nil
+	end
+
+	State.yujiKeyConn = UserInputService.InputBegan:Connect(function(input, gp)
+		if gp or not State.yuji then return end
+		if input.KeyCode ~= State.yujiKey then return end
+		task.spawn(function()
+			task.wait(State.yujiKeyDelay)
+			if State.yuji then fireSkillByMode() end
+		end)
+	end)
+end
+
+local function lockTick()
+	local target = State.forcedLock
+
+	if not target then
+		if not State.lock then return end
+
+		local myChar = LP.Character
+		local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+		if not myRoot then return end
+
+		local best, bestDist = nil, State.lockRange
+		for hum in pairs(hooked) do
+			local model = hum.Parent
+			if model and model.Parent and model ~= myChar and not isTeammate(model) then
+				local root = model:FindFirstChild("HumanoidRootPart")
+				if root then
+					local dist = (root.Position - myRoot.Position).Magnitude
+					if dist < bestDist then
+						best, bestDist = root, dist
+					end
+				end
+			end
+		end
+		target = best
+	end
+
+	if not target then return end
+
+	local myChar = LP.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+	if not myRoot or not hum then return end
+
+	local p = myRoot.Position
+	local t = target.Position
+	if hum.AutoRotate then hum.AutoRotate = false end
+	myRoot.CFrame = CFrame.lookAt(p, Vector3.new(t.X, p.Y, t.Z))
+end
+
+local function doRejoin()
+	pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+end
+
+local function doServerHop()
+	task.spawn(function()
+		local okHop = pcall(function()
+			local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+				.. "/servers/Public?sortOrder=Asc&limit=100"
+			local data = HttpService:JSONDecode(game:HttpGet(url))
+			if data and data.data then
+				for _, srv in ipairs(data.data) do
+					if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers
+						and srv.id ~= game.JobId then
+						TeleportService:TeleportToPlaceInstance(game.PlaceId, srv.id, LP)
+						return
+					end
+				end
+			end
+			TeleportService:Teleport(game.PlaceId, LP)
+		end)
+		if not okHop then doRejoin() end
+	end)
+end
+
+local function doJoinLowest()
+	task.spawn(function()
+		local okJoin = pcall(function()
+			local cursor = ""
+			local bestId, bestCount = nil, math.huge
+
+			for _ = 1, 3 do
+				local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+					.. "/servers/Public?sortOrder=Asc&limit=100"
+				if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+
+				local data = HttpService:JSONDecode(game:HttpGet(url))
+				if not (data and data.data) then break end
+
+				for _, srv in ipairs(data.data) do
+					if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers
+						and srv.id ~= game.JobId and srv.playing < bestCount then
+						bestCount = srv.playing
+						bestId = srv.id
+					end
+				end
+
+				cursor = data.nextPageCursor or ""
+				if cursor == "" then break end
+			end
+
+			if bestId then
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, bestId, LP)
+			else
+				TeleportService:Teleport(game.PlaceId, LP)
+			end		end)
+		if not okJoin then doRejoin() end
+	end)
+end
+
+local function hookAutoRejoin()
+	if State.rejoinConn then
+		pcall(function() State.rejoinConn:Disconnect() end)
+		State.rejoinConn = nil
+	end
+
+	if not State.autoRejoin then return end
+
+	State.rejoinConn = LP.OnTeleport:Connect(function(state)
+		if state == Enum.TeleportState.Started then
+			task.wait(3)
+			doRejoin()
+		end
+	end)
+end
+
+LP.CharacterAdded:Connect(function()
+	task.wait(1)
+	if State.headRide then hookMyAnimator() end
+	if State.autoRejoin then
+		task.spawn(function()
+			task.wait(5)
+			doRejoin()
+		end)
+	end
+end)
+
+local function buildLogger()
+	if getgenv().OutlawLogger and getgenv().OutlawLogger.Parent then return end
+
+	for _, root in ipairs({ gethui and gethui() or nil, game:GetService("CoreGui"), LP:FindFirstChild("PlayerGui") }) do
+		if root then
+			local existing = root:FindFirstChild("OutlawBlockBuilder")
+			if existing then pcall(function() existing:Destroy() end) end
+		end
+	end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "OutlawBlockBuilder"
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	pcall(function() gui.Parent = gethui() end)
+	if not gui.Parent then pcall(function() gui.Parent = game:GetService("CoreGui") end) end
+	if not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+
+	local cam = workspace.CurrentCamera
+	local screenW, screenH = cam.ViewportSize.X, cam.ViewportSize.Y
+	local WIN_W, WIN_H = 440, 340
+	local cx = math.max(12, math.floor((screenW - WIN_W) / 2 - 220))
+	local cy = math.floor((screenH - WIN_H) / 2)
+
+	local win = Instance.new("Frame")
+	win.Name = "BlockBuilder"
+	win.Size = UDim2.new(0, WIN_W, 0, WIN_H)
+	win.Position = UDim2.new(0, cx, 0, cy)
+	win.BackgroundColor3 = Color3.fromRGB(20, 18, 12)
+	win.BorderSizePixel = 0
+	win.Active = true
+	win.Draggable = true
+	win.Parent = gui
+	Instance.new("UICorner", win).CornerRadius = UDim.new(0, 4)
+	local winStroke = Instance.new("UIStroke", win)
+	winStroke.Color = Color3.fromRGB(140, 100, 40)
+	winStroke.Thickness = 1
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -100, 0, 22)
+	title.Position = UDim2.new(0, 10, 0, 4)
+	title.BackgroundTransparency = 1
+	title.Text = "Block Builder     0 Entries"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 12
+	title.TextColor3 = Color3.fromRGB(230, 210, 160)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = win
+
+	local clearBtn = Instance.new("TextButton")
+	clearBtn.Size = UDim2.new(0, 50, 0, 18)
+	clearBtn.Position = UDim2.new(1, -78, 0, 6)
+	clearBtn.BackgroundColor3 = Color3.fromRGB(70, 60, 40)
+	clearBtn.Text = "Clear"
+	clearBtn.Font = Enum.Font.Gotham
+	clearBtn.TextSize = 11
+	clearBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	clearBtn.BorderSizePixel = 0
+	clearBtn.Parent = win
+	Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 3)
+
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0, 18, 0, 18)
+	closeBtn.Position = UDim2.new(1, -24, 0, 6)
+	closeBtn.BackgroundColor3 = Color3.fromRGB(70, 50, 30)
+	closeBtn.Text = "X"
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.TextSize = 11
+	closeBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	closeBtn.BorderSizePixel = 0
+	closeBtn.Parent = win
+	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 3)
+
+	local reopenBtn = Instance.new("TextButton")
+	reopenBtn.Size = UDim2.new(0, 120, 0, 22)
+	reopenBtn.Position = UDim2.new(0, 12, 0, 80)
+	reopenBtn.BackgroundColor3 = Color3.fromRGB(30, 26, 16)
+	reopenBtn.Text = "Block Builder"
+	reopenBtn.Font = Enum.Font.GothamBold
+	reopenBtn.TextSize = 11
+	reopenBtn.TextColor3 = Color3.fromRGB(230, 210, 160)
+	reopenBtn.BorderSizePixel = 0
+	reopenBtn.Visible = false
+	reopenBtn.Parent = gui
+	Instance.new("UICorner", reopenBtn).CornerRadius = UDim.new(0, 3)
+	local reopenStroke = Instance.new("UIStroke", reopenBtn)
+	reopenStroke.Color = Color3.fromRGB(140, 100, 40)
+	reopenStroke.Thickness = 1
+
+	closeBtn.MouseButton1Click:Connect(function()
+		win.Visible = false
+		reopenBtn.Visible = true
+	end)
+	reopenBtn.MouseButton1Click:Connect(function()
+		win.Visible = true
+		reopenBtn.Visible = false
+	end)
+
+	local headerRow = Instance.new("Frame")
+	headerRow.Size = UDim2.new(1, -16, 0, 18)
+	headerRow.Position = UDim2.new(0, 8, 0, 28)
+	headerRow.BackgroundTransparency = 1
+	headerRow.Parent = win
+
+	local function headerLabel(text, xo, w)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(0, w, 1, 0)
+		l.Position = UDim2.new(0, xo, 0, 0)
+		l.BackgroundTransparency = 1
+		l.Text = text
+		l.Font = Enum.Font.GothamBold
+		l.TextSize = 10
+		l.TextColor3 = Color3.fromRGB(220, 200, 140)
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.Parent = headerRow
+	end
+
+	headerLabel("T", 2, 14)
+	headerLabel("Animation", 20, 132)
+	headerLabel("ID", 158, 146)
+	headerLabel("Enemy", 306, 66)
+	headerLabel("Dist", 374, 50)
+
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Size = UDim2.new(1, -16, 1, -54)
+	scroll.Position = UDim2.new(0, 8, 0, 48)
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 4
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.Parent = win
+
+	local layout = Instance.new("UIListLayout", scroll)
+	layout.Padding = UDim.new(0, 3)
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 4)
+	end)
+
+	clearBtn.MouseButton1Click:Connect(function()
+		for _, r in ipairs(Logger.rows) do
+			if r and r.Parent then r:Destroy() end
+		end
+		Logger.rows = {}
+		title.Text = "Block Builder     0 Entries"
+	end)
+
+	Logger.win    = win
+	Logger.scroll = scroll
+	Logger.title  = title
+
+	getgenv().OutlawLogger       = win
+	getgenv().OutlawLoggerReopen = reopenBtn
+end
+
+local function addLogRow(id, name, source, dist)
+	if not Logger.scroll or not Logger.scroll.Parent then return end
+
+	local row = Instance.new("TextButton")
+	row.Size = UDim2.new(1, -4, 0, 22)
+	row.BackgroundColor3 = Color3.fromRGB(40, 35, 20)
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.BorderSizePixel = 0
+	row.Parent = Logger.scroll
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 3)
+
+	local dot = Instance.new("Frame")
+	dot.Size = UDim2.new(0, 8, 0, 8)
+	dot.Position = UDim2.new(0, 4, 0.5, -4)
+	dot.BackgroundColor3 = animTimings[id] and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(70, 70, 70)
+	dot.BorderSizePixel = 0
+	dot.Parent = row
+	Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+	timingRowDots[id] = dot
+
+	local function cell(text, xo, w, color)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(0, w, 1, 0)
+		l.Position = UDim2.new(0, xo, 0, 0)
+		l.BackgroundTransparency = 1
+		l.Text = text
+		l.Font = Enum.Font.Gotham
+		l.TextSize = 10
+		l.TextColor3 = color or Color3.fromRGB(220, 220, 220)
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextTruncate = Enum.TextTruncate.AtEnd
+		l.Parent = row
+	end
+
+	cell(name ~= "" and name or "Anim", 20, 132)
+	cell(id, 158, 146, Color3.fromRGB(180, 180, 180))
+	cell(source, 306, 66)
+	cell(tostring(dist or 0), 374, 50)
+
+	row.MouseButton1Click:Connect(function() selectAnim(id) end)
+
+	table.insert(Logger.rows, row)
+	Logger.title.Text = "Block Builder     " .. #Logger.rows .. " Entries"
+end
+
+local function buildMyLogger()
+	if getgenv().OutlawMyLogger and getgenv().OutlawMyLogger.Parent then return end
+
+	for _, root in ipairs({ gethui and gethui() or nil, game:GetService("CoreGui"), LP:FindFirstChild("PlayerGui") }) do
+		if root then
+			local existing = root:FindFirstChild("OutlawPlayerBlockBuilder")
+			if existing then pcall(function() existing:Destroy() end) end
+		end
+	end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "OutlawPlayerBlockBuilder"
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	pcall(function() gui.Parent = gethui() end)
+	if not gui.Parent then pcall(function() gui.Parent = game:GetService("CoreGui") end) end
+	if not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+
+	local cam = workspace.CurrentCamera
+	local screenW, screenH = cam.ViewportSize.X, cam.ViewportSize.Y
+	local WIN_W, WIN_H = 400, 340
+	local cx = math.floor((screenW - WIN_W) / 2 + 220)
+	if cx + WIN_W > screenW - 12 then cx = screenW - WIN_W - 12 end
+	local cy = math.floor((screenH - WIN_H) / 2)
+
+	local win = Instance.new("Frame")
+	win.Name = "PlayerBlockBuilder"
+	win.Size = UDim2.new(0, WIN_W, 0, WIN_H)
+	win.Position = UDim2.new(0, cx, 0, cy)
+	win.BackgroundColor3 = Color3.fromRGB(14, 18, 22)
+	win.BorderSizePixel = 0
+	win.Active = true
+	win.Draggable = true
+	win.Parent = gui
+	Instance.new("UICorner", win).CornerRadius = UDim.new(0, 4)
+	local winStroke = Instance.new("UIStroke", win)
+	winStroke.Color = Color3.fromRGB(60, 110, 150)
+	winStroke.Thickness = 1
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -100, 0, 22)
+	title.Position = UDim2.new(0, 10, 0, 4)
+	title.BackgroundTransparency = 1
+	title.Text = "Player Block Builder     0 Entries"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 12
+	title.TextColor3 = Color3.fromRGB(160, 210, 240)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = win
+
+	local clearBtn = Instance.new("TextButton")
+	clearBtn.Size = UDim2.new(0, 50, 0, 18)
+	clearBtn.Position = UDim2.new(1, -78, 0, 6)
+	clearBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 80)
+	clearBtn.Text = "Clear"
+	clearBtn.Font = Enum.Font.Gotham
+	clearBtn.TextSize = 11
+	clearBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	clearBtn.BorderSizePixel = 0
+	clearBtn.Parent = win
+	Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 3)
+
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0, 18, 0, 18)
+	closeBtn.Position = UDim2.new(1, -24, 0, 6)
+	closeBtn.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+	closeBtn.Text = "X"
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.TextSize = 11
+	closeBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+	closeBtn.BorderSizePixel = 0
+	closeBtn.Parent = win
+	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 3)
+
+	local reopenBtn = Instance.new("TextButton")
+	reopenBtn.Size = UDim2.new(0, 150, 0, 22)
+	reopenBtn.Position = UDim2.new(0, 12, 0, 108)
+	reopenBtn.BackgroundColor3 = Color3.fromRGB(16, 24, 32)
+	reopenBtn.Text = "Player Block Builder"
+	reopenBtn.Font = Enum.Font.GothamBold
+	reopenBtn.TextSize = 11
+	reopenBtn.TextColor3 = Color3.fromRGB(160, 210, 240)
+	reopenBtn.BorderSizePixel = 0
+	reopenBtn.Visible = false
+	reopenBtn.Parent = gui
+	Instance.new("UICorner", reopenBtn).CornerRadius = UDim.new(0, 3)
+	local reopenStroke = Instance.new("UIStroke", reopenBtn)
+	reopenStroke.Color = Color3.fromRGB(60, 110, 150)
+	reopenStroke.Thickness = 1
+
+	closeBtn.MouseButton1Click:Connect(function()
+		win.Visible = false
+		reopenBtn.Visible = true
+	end)
+	reopenBtn.MouseButton1Click:Connect(function()
+		win.Visible = true
+		reopenBtn.Visible = false
+	end)
+
+	local headerRow = Instance.new("Frame")
+	headerRow.Size = UDim2.new(1, -16, 0, 18)
+	headerRow.Position = UDim2.new(0, 8, 0, 28)
+	headerRow.BackgroundTransparency = 1
+	headerRow.Parent = win
+
+	local function headerLabel(text, xo, w)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(0, w, 1, 0)
+		l.Position = UDim2.new(0, xo, 0, 0)
+		l.BackgroundTransparency = 1
+		l.Text = text
+		l.Font = Enum.Font.GothamBold
+		l.TextSize = 10
+		l.TextColor3 = Color3.fromRGB(150, 200, 230)
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.Parent = headerRow
+	end
+
+	headerLabel("T", 2, 14)
+	headerLabel("Animation", 20, 150)
+	headerLabel("ID", 172, 218)
+
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Size = UDim2.new(1, -16, 1, -54)
+	scroll.Position = UDim2.new(0, 8, 0, 48)
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 4
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.Parent = win
+
+	local layout = Instance.new("UIListLayout", scroll)
+	layout.Padding = UDim.new(0, 3)
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 4)
+	end)
+
+	local function clearRows()
+		for _, r in ipairs(MyLogger.rows) do
+			if r and r.Parent then r:Destroy() end
+		end
+		MyLogger.rows = {}
+		title.Text = "Player Block Builder     0 Entries"
+	end
+
+	clearBtn.MouseButton1Click:Connect(clearRows)
+
+	MyLogger.win    = win
+	MyLogger.scroll = scroll
+	MyLogger.title  = title
+
+	getgenv().OutlawMyLogger         = win
+	getgenv().OutlawMyLoggerReopen   = reopenBtn
+	getgenv().OutlawMyLoggerClear    = clearRows
+end
+
+local function addMyLogRow(id, name)
+	if not MyLogger.scroll or not MyLogger.scroll.Parent then return end
+
+	local row = Instance.new("TextButton")
+	row.Size = UDim2.new(1, -4, 0, 20)
+	row.BackgroundColor3 = Color3.fromRGB(22, 34, 44)
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.BorderSizePixel = 0
+	row.Parent = MyLogger.scroll
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 3)
+
+	local dot = Instance.new("Frame")
+	dot.Size = UDim2.new(0, 8, 0, 8)
+	dot.Position = UDim2.new(0, 4, 0.5, -4)
+	dot.BackgroundColor3 = animTimings[id] and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(70, 70, 70)
+	dot.BorderSizePixel = 0
+	dot.Parent = row
+	Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+	timingRowDots[id] = dot
+
+	local function cell(text, xo, w, color)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(0, w, 1, 0)
+		l.Position = UDim2.new(0, xo, 0, 0)
+		l.BackgroundTransparency = 1
+		l.Text = text
+		l.Font = Enum.Font.Gotham
+		l.TextSize = 10
+		l.TextColor3 = color or Color3.fromRGB(215, 225, 235)
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextTruncate = Enum.TextTruncate.AtEnd
+		l.Parent = row
+	end
+
+	cell(name ~= "" and name or "Anim", 20, 150)
+	cell(id, 172, 218, Color3.fromRGB(180, 200, 215))
+
+	row.MouseButton1Click:Connect(function() selectAnim(id) end)
+
+	table.insert(MyLogger.rows, row)
+	MyLogger.title.Text = "Player Block Builder     " .. #MyLogger.rows .. " Entries"
+end
+
+local function hookLog(hum)
+	if not hum or not hum:IsA("Humanoid") or logHooked[hum] then return end
+
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		task.spawn(function()
+			local waited = 0
+			while hum.Parent and not animator and waited < 5 do
+				task.wait(0.1)
+				waited += 0.1
+				animator = hum:FindFirstChildOfClass("Animator")
+			end
+			if animator then hookLog(hum) end
+		end)
+		return
+	end
+
+	logHooked[hum] = true
+	local model = hum.Parent
+
+	animator.AnimationPlayed:Connect(function(track)
+		local anim = track.Animation
+		if not anim then return end
+		local id = anim.AnimationId
+		if not id or id == "" then return end
+		if model == LP.Character then return end
+		if LOCO_NAMES[anim.Name] then return end
+
+		local myRoot    = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+		local theirRoot = model:FindFirstChild("HumanoidRootPart")
+		if not myRoot or not theirRoot then return end
+
+		local d = (myRoot.Position - theirRoot.Position).Magnitude
+		if d <= Logger.range then
+			task.spawn(addLogRow, id, anim.Name, model.Name, math.floor(d))
+		end
+	end)
+end
+
+local function hookMyLogger(hum)
+	if not hum or not hum:IsA("Humanoid") or myLogHooked[hum] then return end
+
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		task.spawn(function()
+			local waited = 0
+			while hum.Parent and not animator and waited < 5 do
+				task.wait(0.1)
+				waited += 0.1
+				animator = hum:FindFirstChildOfClass("Animator")
+			end
+			if animator then hookMyLogger(hum) end
+		end)
+		return
+	end
+
+	myLogHooked[hum] = true
+
+	animator.AnimationPlayed:Connect(function(track)
+		local anim = track.Animation
+		if not anim then return end
+		local id = anim.AnimationId
+		if not id or id == "" then return end
+
+		if getgenv().OutlawIncludeLoco then
+			task.spawn(addMyLogRow, id, anim.Name)
+		elseif getgenv().OutlawFilterLoco ~= false and not isLocomotion(id, anim.Name) then
+			task.spawn(addMyLogRow, id, anim.Name)
+		end
+	end)
+end
+
+local function bindMyLoggerChar(char)
+	if not char then return end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then hookMyLogger(hum) end
+
+	char.ChildAdded:Connect(function(c)
+		if c:IsA("Humanoid") then hookMyLogger(c) end
+	end)
+	char.DescendantAdded:Connect(function(c)
+		if c:IsA("Humanoid") then hookMyLogger(c) end
+	end)
+end
+
+local function hookContainer(container)
+	if not container then return end
+	for _, c in ipairs(container:GetChildren()) do
+		if c:IsA("Model") then
+			local h = c:FindFirstChildOfClass("Humanoid")
+			if h then hookLog(h) end
+		end
+	end
+end
+
+function buildVisualizer()
+	for _, root in ipairs({ gethui and gethui() or nil, game:GetService("CoreGui"), LP:FindFirstChild("PlayerGui") }) do
+		if root then
+			local existing = root:FindFirstChild("OutlawVisualizer")
+			if existing then pcall(function() existing:Destroy() end) end
+		end
+	end
+	getgenv().OutlawVisualizer = nil
+	getgenv().OutlawSelectAnim = nil
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "OutlawVisualizer"
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	pcall(function() gui.Parent = gethui() end)
+	if not gui.Parent then pcall(function() gui.Parent = game:GetService("CoreGui") end) end
+	if not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+
+	local frame = Instance.new("Frame")
+	frame.Name = "VisualizerWindow"
+	frame.Size = UDim2.new(0, 620, 0, 460)
+	frame.Position = UDim2.new(0.5, -310, 0.5, -230)
+	frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Draggable = true
+	frame.Parent = gui
+	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 4)
+	local frameStroke = Instance.new("UIStroke", frame)
+	frameStroke.Color = Color3.fromRGB(60, 60, 60)
+	frameStroke.Thickness = 1
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -20, 0, 20)
+	title.Position = UDim2.new(0, 10, 0, 3)
+	title.BackgroundTransparency = 1
+	title.Text = "Animation Visualizer — per-anim timing"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 12
+	title.TextColor3 = Color3.fromRGB(230, 230, 230)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = frame
+
+	local closeX = Instance.new("TextButton")
+	closeX.Size = UDim2.new(0, 20, 0, 18)
+	closeX.Position = UDim2.new(1, -24, 0, 3)
+	closeX.BackgroundTransparency = 1
+	closeX.Text = "X"
+	closeX.Font = Enum.Font.GothamBold
+	closeX.TextSize = 12
+	closeX.TextColor3 = Color3.fromRGB(220, 220, 220)
+	closeX.BorderSizePixel = 0
+	closeX.Parent = frame
+	closeX.MouseButton1Click:Connect(function() frame.Visible = false end)
+
+	local viewport = Instance.new("ViewportFrame")
+	viewport.Size = UDim2.new(0, 600, 0, 280)
+	viewport.Position = UDim2.new(0, 10, 0, 26)
+	viewport.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	viewport.BorderSizePixel = 0
+	viewport.Parent = frame
+	Instance.new("UICorner", viewport).CornerRadius = UDim.new(0, 2)
+	local vpStroke = Instance.new("UIStroke", viewport)
+	vpStroke.Color = Color3.fromRGB(80, 80, 80)
+	vpStroke.Thickness = 1
+
+	local camera = Instance.new("Camera")
+	camera.CFrame = CFrame.new(Vector3.new(0, 4, -16), Vector3.new(0, 3, 0))
+	camera.FieldOfView = 60
+	camera.Parent = viewport
+	viewport.CurrentCamera = camera
+
+	local world = Instance.new("WorldModel")
+	world.Parent = viewport
+
+	local plate = Instance.new("Part")
+	plate.Name = "PreviewFloor"
+	plate.Size = Vector3.new(30, 0.2, 30)
+	plate.Position = Vector3.new(0, -0.1, 0)
+	plate.Anchored = true
+	plate.CanCollide = false
+	plate.Color = Color3.fromRGB(60, 60, 60)
+	plate.Material = Enum.Material.SmoothPlastic
+	plate.Parent = world
+
+	local idBar = Instance.new("TextLabel")
+	idBar.Size = UDim2.new(0, 470, 0, 18)
+	idBar.Position = UDim2.new(0, 10, 0, 310)
+	idBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	idBar.BorderSizePixel = 0
+	idBar.Text = "rbxassetid://0"
+	idBar.Font = Enum.Font.Gotham
+	idBar.TextSize = 11
+	idBar.TextColor3 = Color3.fromRGB(200, 200, 200)
+	idBar.TextXAlignment = Enum.TextXAlignment.Left
+	idBar.Parent = frame
+	Instance.new("UICorner", idBar).CornerRadius = UDim.new(0, 2)
+	local idPad = Instance.new("UIPadding", idBar)
+	idPad.PaddingLeft = UDim.new(0, 6)
+
+	local statusBadge = Instance.new("TextLabel")
+	statusBadge.Size = UDim2.new(0, 120, 0, 18)
+	statusBadge.Position = UDim2.new(0, 490, 0, 310)
+	statusBadge.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	statusBadge.BorderSizePixel = 0
+	statusBadge.Text = "NEW"
+	statusBadge.Font = Enum.Font.GothamBold
+	statusBadge.TextSize = 11
+	statusBadge.TextColor3 = Color3.fromRGB(255, 255, 255)
+	statusBadge.Parent = frame
+	Instance.new("UICorner", statusBadge).CornerRadius = UDim.new(0, 2)
+
+	local scrubBg = Instance.new("Frame")
+	scrubBg.Size = UDim2.new(0, 600, 0, 14)
+	scrubBg.Position = UDim2.new(0, 10, 0, 332)
+	scrubBg.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+	scrubBg.BorderSizePixel = 0
+	scrubBg.Parent = frame
+	Instance.new("UICorner", scrubBg).CornerRadius = UDim.new(0, 3)
+
+	local scrubFill = Instance.new("Frame")
+	scrubFill.Size = UDim2.new(0, 0, 1, 0)
+	scrubFill.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+	scrubFill.BorderSizePixel = 0
+	scrubFill.Parent = scrubBg
+	Instance.new("UICorner", scrubFill).CornerRadius = UDim.new(0, 3)
+
+	local blockMarker = Instance.new("Frame")
+	blockMarker.Size = UDim2.new(0, 3, 1, 6)
+	blockMarker.Position = UDim2.new(0, -100, 0, -3)
+	blockMarker.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
+	blockMarker.BorderSizePixel = 0
+	blockMarker.ZIndex = 3
+	blockMarker.Visible = false
+	blockMarker.Parent = scrubBg
+
+	local tradeMarker = Instance.new("Frame")
+	tradeMarker.Size = UDim2.new(0, 3, 1, 6)
+	tradeMarker.Position = UDim2.new(0, -100, 0, -3)
+	tradeMarker.BackgroundColor3 = Color3.fromRGB(220, 130, 60)
+	tradeMarker.BorderSizePixel = 0
+	tradeMarker.ZIndex = 3
+	tradeMarker.Visible = false
+	tradeMarker.Parent = scrubBg
+
+	local timeLbl = Instance.new("TextLabel")
+	timeLbl.Size = UDim2.new(0, 300, 0, 14)
+	timeLbl.Position = UDim2.new(0, 10, 0, 350)
+	timeLbl.BackgroundTransparency = 1
+	timeLbl.Text = "0.000s / 0.000s"
+	timeLbl.Font = Enum.Font.Gotham
+	timeLbl.TextSize = 10
+	timeLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+	timeLbl.TextXAlignment = Enum.TextXAlignment.Left
+	timeLbl.Parent = frame
+
+	local timingLbl = Instance.new("TextLabel")
+	timingLbl.Size = UDim2.new(0, 300, 0, 14)
+	timingLbl.Position = UDim2.new(0, 310, 0, 350)
+	timingLbl.BackgroundTransparency = 1
+	timingLbl.Text = "block: -- | trade: --"
+	timingLbl.Font = Enum.Font.Gotham
+	timingLbl.TextSize = 10
+	timingLbl.TextColor3 = Color3.fromRGB(180, 220, 180)
+	timingLbl.TextXAlignment = Enum.TextXAlignment.Right
+	timingLbl.Parent = frame
+
+	local ctrlRow = Instance.new("Frame")
+	ctrlRow.Size = UDim2.new(0, 600, 0, 26)
+	ctrlRow.Position = UDim2.new(0, 10, 0, 366)
+	ctrlRow.BackgroundTransparency = 1
+	ctrlRow.Parent = frame
+
+	local function makeButton(parent, text, xo, w, h, color)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(0, w, 0, h)
+		b.Position = UDim2.new(0, xo, 0, 0)
+		b.BackgroundColor3 = color
+		b.Text = text
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = h >= 24 and 11 or 10
+		b.TextColor3 = Color3.new(1, 1, 1)
+		b.BorderSizePixel = 0
+		b.Parent = parent
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 3)
+		return b
+	end
+
+	local btnPlay       = makeButton(ctrlRow, "Play",             0,   60, 24, Color3.fromRGB(50, 130, 50))
+	local btnPause      = makeButton(ctrlRow, "Pause",            64,  60, 24, Color3.fromRGB(130, 100, 40))
+	local btnStop       = makeButton(ctrlRow, "Stop",             128, 60, 24, Color3.fromRGB(140, 50, 50))
+	local btnSpeed      = makeButton(ctrlRow, "Speed 1x",         192, 76, 24, Color3.fromRGB(60, 60, 90))
+	local btnLoop       = makeButton(ctrlRow, "Loop ON",          272, 76, 24, Color3.fromRGB(70, 70, 100))
+	local btnSaveBlock  = makeButton(ctrlRow, "Save Block Time",  352, 120, 24, Color3.fromRGB(40, 130, 70))
+	local btnSaveTrade  = makeButton(ctrlRow, "Save Trade Time",  476, 120, 24, Color3.fromRGB(150, 80, 40))
+
+	local editRow = Instance.new("Frame")
+	editRow.Size = UDim2.new(0, 600, 0, 24)
+	editRow.Position = UDim2.new(0, 10, 0, 396)
+	editRow.BackgroundTransparency = 1
+	editRow.Parent = frame
+
+	local btnClearBlock = makeButton(editRow, "Clear Block",             0,   120, 22, Color3.fromRGB(70, 40, 40))
+	local btnClearTrade = makeButton(editRow, "Clear Trade",             128, 120, 22, Color3.fromRGB(70, 40, 40))
+	local btnClearAnim  = makeButton(editRow, "Clear Both (this anim)",  256, 180, 22, Color3.fromRGB(70, 40, 40))
+	local btnClearAll   = makeButton(editRow, "Clear All Timings",       444, 156, 22, Color3.fromRGB(120, 30, 30))
+
+	local function refreshBadge()
+		if not Visualizer.currentId then
+			statusBadge.Text = "NONE"
+			statusBadge.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+			return
+		end
+		local t = animTimings[Visualizer.currentId]
+		if not t then
+			statusBadge.Text = "NEW"
+			statusBadge.BackgroundColor3 = Color3.fromRGB(200, 120, 40)
+		elseif t.block and t.trade then
+			statusBadge.Text = "SAVED"
+			statusBadge.BackgroundColor3 = Color3.fromRGB(40, 140, 60)
+		else
+			statusBadge.Text = "PARTIAL"
+			statusBadge.BackgroundColor3 = Color3.fromRGB(180, 160, 30)
+		end
+	end
+
+	local function refreshTimingUI()
+		local id = Visualizer.currentId
+		if not id then
+			blockMarker.Visible = false
+			tradeMarker.Visible = false
+			timingLbl.Text = "block: -- | trade: --"
+			refreshBadge()
+			return
+		end
+
+		local t   = animTimings[id]
+		local dur = Visualizer.duration
+
+		if t and t.block and dur > 0 then
+			blockMarker.Visible = true
+			blockMarker.Position = UDim2.new(t.block / dur, 0, 0, -3)
+		else
+			blockMarker.Visible = false
+		end
+
+		if t and t.trade and dur > 0 then
+			tradeMarker.Visible = true
+			tradeMarker.Position = UDim2.new(t.trade / dur, 0, 0, -3)
+		else
+			tradeMarker.Visible = false
+		end
+
+		local bs = t and t.block and string.format("%.3fs", t.block) or "--"
+		local ts = t and t.trade and string.format("%.3fs", t.trade) or "--"
+		timingLbl.Text = "block: " .. bs .. " | trade: " .. ts
+		refreshBadge()
+	end
+
+	local function flashButton(btn, origColor)
+		btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		task.delay(0.15, function()
+			if btn and btn.Parent then btn.BackgroundColor3 = origColor end
+		end)
+	end
+
+	local function buildRig()
+		if not world or not world.Parent then return end
+		for _, c in ipairs(world:GetChildren()) do
+			if c.Name ~= "PreviewFloor" then c:Destroy() end
+		end
+		Visualizer.rig, Visualizer.hum = nil, nil
+
+		local char = LP.Character
+		if not char then return end
+
+		local okClone, clone = pcall(function() return char:Clone() end)
+		if not okClone or not clone then return end
+
+		clone.Name = "PreviewRig"
+		for _, d in ipairs(clone:GetDescendants()) do
+			if d:IsA("Script") or d:IsA("LocalScript")
+				or d:IsA("Sound") or d:IsA("ParticleEmitter") then
+				d:Destroy()
+			end
+		end
+		clone.Parent = world
+
+		local hrp = clone:FindFirstChild("HumanoidRootPart") or clone.PrimaryPart
+		if hrp then
+			hrp.Anchored = false
+			clone:PivotTo(CFrame.new(0, 3, 0))
+			hrp.Anchored = true
+		else
+			clone:PivotTo(CFrame.new(0, 3, 0))
+			for _, p in ipairs(clone:GetDescendants()) do
+				if p:IsA("BasePart") then p.Anchored = true end
+			end
+		end
+
+		local hum = clone:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			local old = hum:FindFirstChildOfClass("Animator")
+			if old then old:Destroy() end
+			local a = Instance.new("Animator")
+			a.Parent = hum
+			Visualizer.hum = hum
+		end
+		Visualizer.rig = clone
+	end
+
+	buildRig()
+
+	local function stopPlayback()
+		if Visualizer.track then
+			pcall(function() Visualizer.track:Stop() end)
+			Visualizer.track = nil
+		end
+		Visualizer.paused = false
+		scrubFill.Size = UDim2.new(0, 0, 1, 0)
+		timeLbl.Text = "0.000s / 0.000s"
+		btnPause.Text = "Pause"
+	end
+
+	local function playAnim(id)
+		if not Visualizer.hum or not Visualizer.hum.Parent then buildRig() end
+		if not Visualizer.hum then return end
+
+		stopPlayback()
+
+		local anim = Instance.new("Animation")
+		anim.AnimationId = id
+
+		local okLoad, track = pcall(function() return Visualizer.hum:LoadAnimation(anim) end)
+		if not okLoad or not track then return end
+
+		track.Looped = Visualizer.looping
+		track:Play()
+		pcall(function() track:AdjustSpeed(Visualizer.speed) end)
+
+		Visualizer.track = track
+		Visualizer.duration = track.Length or 0
+		Visualizer.paused = false
+		btnPause.Text = "Pause"
+		refreshTimingUI()
+	end
+
+	local function togglePause()
+		if not Visualizer.track then return end
+		Visualizer.paused = not Visualizer.paused
+
+		if Visualizer.paused then
+			Visualizer.pausedTime = Visualizer.track.TimePosition
+			pcall(function() Visualizer.track:AdjustSpeed(0) end)
+			pcall(function() Visualizer.track:Pause() end)
+			btnPause.Text = "Resume"
+		else
+			pcall(function() Visualizer.track:Play() end)
+			pcall(function() Visualizer.track.TimePosition = Visualizer.pausedTime end)
+			pcall(function() Visualizer.track:AdjustSpeed(Visualizer.speed) end)
+			btnPause.Text = "Pause"
+		end
+	end
+
+	RunService.RenderStepped:Connect(function()
+		if not Visualizer.track then return end
+		if Visualizer.paused then
+			pcall(function() Visualizer.track.TimePosition = Visualizer.pausedTime end)
+		end
+		local t   = Visualizer.track.TimePosition or 0
+		local dur = Visualizer.track.Length or Visualizer.duration or 0
+		Visualizer.duration = dur
+		local frac = dur > 0 and (t / dur) or 0
+		if frac > 1 then frac = 1 end
+		scrubFill.Size = UDim2.new(frac, 0, 1, 0)
+		timeLbl.Text = string.format("%.3fs / %.3fs", t, dur)
+	end)
+
+	local scrubDragging = false
+	scrubBg.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		scrubDragging = true
+		if not Visualizer.track then return end
+		local width = scrubBg.AbsoluteSize.X
+		if width > 0 then
+			local f = math.clamp((input.Position.X - scrubBg.AbsolutePosition.X) / width, 0, 1)
+			Visualizer.pausedTime = f * (Visualizer.track.Length or 0)
+			pcall(function() Visualizer.track.TimePosition = Visualizer.pausedTime end)
+		end
+	end)
+	scrubBg.InputChanged:Connect(function(input)
+		if not scrubDragging or not Visualizer.track then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		local width = scrubBg.AbsoluteSize.X
+		if width > 0 then
+			local f = math.clamp((input.Position.X - scrubBg.AbsolutePosition.X) / width, 0, 1)
+			Visualizer.pausedTime = f * (Visualizer.track.Length or 0)
+			pcall(function() Visualizer.track.TimePosition = Visualizer.pausedTime end)
+		end
+	end)
+	scrubBg.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			scrubDragging = false
+		end
+	end)
+
+	btnPlay.MouseButton1Click:Connect(function()
+		if Visualizer.currentId then playAnim(Visualizer.currentId) end
+	end)
+	btnPause.MouseButton1Click:Connect(togglePause)
+	btnStop.MouseButton1Click:Connect(stopPlayback)
+
+	local SPEEDS = { 0.1, 0.25, 0.5, 1, 1.5, 2 }
+	local speedIdx = 4
+	btnSpeed.MouseButton1Click:Connect(function()
+		speedIdx = speedIdx % #SPEEDS + 1
+		Visualizer.speed = SPEEDS[speedIdx]
+		btnSpeed.Text = "Speed " .. tostring(Visualizer.speed) .. "x"
+		if Visualizer.track and not Visualizer.paused then
+			pcall(function() Visualizer.track:AdjustSpeed(Visualizer.speed) end)
+		end
+	end)
+
+	btnLoop.MouseButton1Click:Connect(function()
+		Visualizer.looping = not Visualizer.looping
+		btnLoop.Text = Visualizer.looping and "Loop ON" or "Loop OFF"
+		if Visualizer.track then
+			pcall(function() Visualizer.track.Looped = Visualizer.looping end)
+		end
+	end)
+
+	btnSaveBlock.MouseButton1Click:Connect(function()
+		if not Visualizer.currentId or not Visualizer.track then return end
+		local t = Visualizer.track.TimePosition or 0
+		local id = Visualizer.currentId
+		if not animTimings[id] then animTimings[id] = {} end
+		animTimings[id].block = t
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+		flashButton(btnSaveBlock, Color3.fromRGB(40, 130, 70))
+		Airflow:Notify("outlaw.dev", string.format("Block time %.3fs saved for %s", t, id), 3)
+	end)
+
+	btnSaveTrade.MouseButton1Click:Connect(function()
+		if not Visualizer.currentId or not Visualizer.track then return end
+		local t = Visualizer.track.TimePosition or 0
+		local id = Visualizer.currentId
+		if not animTimings[id] then animTimings[id] = {} end
+		animTimings[id].trade = t
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+		flashButton(btnSaveTrade, Color3.fromRGB(150, 80, 40))
+		Airflow:Notify("outlaw.dev", string.format("Trade time %.3fs saved for %s", t, id), 3)
+	end)
+
+	btnClearBlock.MouseButton1Click:Connect(function()
+		local id = Visualizer.currentId
+		if not id or not animTimings[id] then return end
+		animTimings[id].block = nil
+		if not next(animTimings[id]) then animTimings[id] = nil end
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+	end)
+	btnClearTrade.MouseButton1Click:Connect(function()
+		local id = Visualizer.currentId
+		if not id or not animTimings[id] then return end
+		animTimings[id].trade = nil
+		if not next(animTimings[id]) then animTimings[id] = nil end
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+	end)
+	btnClearAnim.MouseButton1Click:Connect(function()
+		local id = Visualizer.currentId
+		if not id then return end
+		animTimings[id] = nil
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+	end)
+	btnClearAll.MouseButton1Click:Connect(function()
+		animTimings = {}
+		saveTimings()
+		refreshTimingUI()
+		refreshRowDots()
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gp)
+		if gp then return end
+		if input.KeyCode ~= Enum.KeyCode.Space then return end
+		if not frame.Visible then return end
+		togglePause()
+	end)
+
+	Visualizer.gui      = gui
+	Visualizer.frame    = frame
+	Visualizer.viewport = viewport
+	Visualizer.camera   = camera
+	Visualizer.world    = world
+
+	getgenv().OutlawSelectAnim = function(id)
+		Visualizer.currentId = id
+		idBar.Text = id
+		frame.Visible = true
+		playAnim(id)
+		refreshTimingUI()
+	end
+
+	if Visualizer.pendingId then
+		local id = Visualizer.pendingId
+		Visualizer.pendingId = nil
+		task.spawn(function()
+			getgenv().OutlawSelectAnim(id)
+		end)
+	end
+
+	LP.CharacterAdded:Connect(function()
+		task.wait(1)
+		buildRig()
+		if Visualizer.track and not Visualizer.paused then
+			pcall(function() Visualizer.track:Stop() end)
+			Visualizer.track = nil
+		end
+	end)
+
+	getgenv().OutlawVisualizer = frame
+end
+
+local Window = Airflow:CreateWindow({
+	Name = "outlaw.dev",
+	LoadingSubtitle = "syncrypt",
+	ToggleUIKeybind = "RightControl",
+	Loading = false,
+	ConfigurationSaving = { Enabled = true, FolderName = "outlaw.dev", FileName = "default" },
+	Home = { Name = "Home", Stats = { "FPS", "Ping", "Executor", "Game", "Region", "Time" } },
+})
+
+local FarmTab         = Window:CreateTab("Auto Farm", "bot")
+local BlockTab        = Window:CreateTab("Auto Block", "shield")
+local TradeTab        = Window:CreateTab("M1 Trade", "sword")
+local HeadRideTab     = Window:CreateTab("Auto Head Ride", "crown")
+local NanamiTab       = Window:CreateTab("Auto Nanami", "target")
+local YujiTab         = Window:CreateTab("Auto Yuji", "flame")
+local BlockBuilderTab = Window:CreateTab("Block Builder", "scroll")
+local MyLoggerTab     = Window:CreateTab("Player Block Builder", "list")
+local VisTab          = Window:CreateTab("Visualizer", "eye")
+local PlayerTab       = Window:CreateTab("Player", "person-standing")
+local MiscTab         = Window:CreateTab("Misc", "settings")
+local SettingsTab     = Window:CreateTab("Settings", "settings")
+
+FarmTab:CreateSection("Auto Farm")
+FarmTab:CreateToggle({
+	Name = "Auto Farm Enemies",
+	Description = "M1 spam + skill rotation, auto-faces the enemy, fires all at once",
+	CurrentValue = false,
+	Flag = "FR_On",
+	Callback = function(v)
+		State.farm = v
+		if v then
+			startHooks()
+			if not State.lockConn then
+				State.lockConn = RunService.RenderStepped:Connect(lockTick)
+			end
+			farmLoop()
+		else
+			if State.farmConn then State.farmConn:Disconnect() State.farmConn = nil end
+			if State.farmM1Thread then task.cancel(State.farmM1Thread) State.farmM1Thread = nil end
+			if State.farmSkillThread then task.cancel(State.farmSkillThread) State.farmSkillThread = nil end
+			State.farmTarget = nil
+			State.forcedLock = nil
+			if not State.lock and State.lockConn then
+				State.lockConn:Disconnect()
+				State.lockConn = nil
+			end
+			if not State.autoBlock and not State.trade and not State.headRide then
+				stopHooks()
+			end
+		end
+	end,
+})
+FarmTab:CreateDropdown({
+	Name = "Position Mode",
+	Options = { "On Top", "Below", "Behind", "In Front" },
+	CurrentOption = "On Top",
+	Flag = "FR_Pos",
+	Callback = function(v) State.farmPosMode = v end,
+})
+FarmTab:CreateDropdown({
+	Name = "Skill Rotation",
+	Options = { "1,2,3,4", "1", "2", "3", "4" },
+	CurrentOption = "1,2,3,4",
+	Flag = "FR_Rotation",
+	Callback = function(v)
+		State.farmRotation = (v == "1,2,3,4") and { "1", "2", "3", "4" } or { v }
+		State.farmRotIndex = 1
+	end,
+})
+FarmTab:CreateToggle({
+	Name = "Team Check",
+	CurrentValue = true,
+	Flag = "FR_TeamCheck",
+	Callback = function(v) State.farmTeamCheck = v end,
+})
+FarmTab:CreateSlider({
+	Name = "Farm Range",
+	Range = { 5, 200 },
+	Increment = 1,
+	CurrentValue = 30,
+	Flag = "FR_Range",
+	Callback = function(v) State.farmRange = v end,
+})
+FarmTab:CreateSlider({
+	Name = "M1 Spam Delay (s)",
+	Range = { 0.02, 0.5 },
+	Increment = 0.01,
+	Suffix = "s",
+	CurrentValue = 0.08,
+	Flag = "FR_M1Delay",
+	Callback = function(v) State.farmM1Delay = v end,
+})
+FarmTab:CreateSlider({
+	Name = "Skill Spam Delay (s)",
+	Range = { 0.1, 3 },
+	Increment = 0.05,
+	Suffix = "s",
+	CurrentValue = 0.4,
+	Flag = "FR_SkillDelay",
+	Callback = function(v) State.farmSkillDelay = v end,
+})
+FarmTab:CreateSection("Manual Test")
+FarmTab:CreateButton({
+	Name = "Test Next Skill",
+	Callback = function()
+		fireNextFarmSkill()
+		Airflow:Notify("outlaw.dev", "Fired next skill", 2)
+	end,
+})
+FarmTab:CreateButton({
+	Name = "Test Farm M1",
+	Callback = function()
+		fireM1()
+		Airflow:Notify("outlaw.dev", "M1 fired", 2)
+	end,
+})
+
+BlockTab:CreateSection("Auto Block")
+BlockTab:CreateToggle({
+	Name = "Auto Block",
+	Description = "Blocks on every known attack id or anim with saved timings. Never gated by trade.",
+	CurrentValue = false,
+	Flag = "AB_On",
+	Callback = function(v)
+		State.autoBlock = v
+		if v then
+			startHooks()
+		elseif not State.trade and not State.headRide and not State.farm then
+			stopHooks()
+		end
+	end,
+})
+BlockTab:CreateToggle({
+	Name = "Hook Dummies",
+	CurrentValue = true,
+	Flag = "AB_HookDummies",
+	Callback = function(v)
+		State.hookDummies = v
+		if v and (State.autoBlock or State.trade or State.headRide or State.farm) then
+			hookLive()
+		end
+	end,
+})
+BlockTab:CreateToggle({
+	Name = "Hook Players",
+	CurrentValue = true,
+	Flag = "AB_HookPlayers",
+	Callback = function(v)
+		State.hookPlayers = v
+		if v and (State.autoBlock or State.trade or State.headRide or State.farm) then
+			hookPlayersFunc()
+		end
+	end,
+})
+BlockTab:CreateToggle({
+	Name = "Ping Compensation",
+	CurrentValue = true,
+	Flag = "AB_PingComp",
+	Callback = function(v) State.pingComp = v end,
+})
+BlockTab:CreateSlider({
+	Name = "Ping Compensation (ms)",
+	Range = { 0, 200 },
+	Increment = 5,
+	Suffix = "ms",
+	CurrentValue = 50,
+	Flag = "AB_PingMs",
+	Callback = function(v) State.pingCompMs = v end,
+})
+BlockTab:CreateSlider({
+	Name = "Block Range",
+	Range = { 0, 200 },
+	Increment = 1,
+	CurrentValue = 25,
+	Flag = "AB_Range",
+	Callback = function(v) State.blockRange = v end,
+})
+BlockTab:CreateSlider({
+	Name = "Fallback Block Hold (s)",
+	Range = { 0.1, 2 },
+	Increment = 0.01,
+	Suffix = "s",
+	CurrentValue = 0.20,
+	Flag = "AB_Hold",
+	Callback = function(v) State.blockHold = v end,
+})
+BlockTab:CreateSection("Manual Test")
+BlockTab:CreateButton({
+	Name = "Test BlockOn",
+	Callback = function()
+		local i = getInput()
+		if not i then return Airflow:Notify("outlaw.dev", "Input not found", 3) end
+		pcall(function() i:FireServer("BlockOn") end)
+		Airflow:Notify("outlaw.dev", "BlockOn fired", 2)
+	end,
+})
+BlockTab:CreateButton({
+	Name = "Test BlockOff",
+	Callback = function()
+		local i = getInput()
+		if not i then return Airflow:Notify("outlaw.dev", "Input not found", 3) end
+		pcall(function() i:FireServer("BlockOff") end)
+		Airflow:Notify("outlaw.dev", "BlockOff fired", 2)
+	end,
+})
+BlockTab:CreateButton({
+	Name = "Test Full Pulse",
+	Callback = function()
+		local i = getInput()
+		if not i then return Airflow:Notify("outlaw.dev", "Input not found", 3) end
+		task.spawn(function()
+			pcall(function() i:FireServer("BlockOn") end)
+			task.wait(State.blockHold)
+			pcall(function() i:FireServer("BlockOff") end)
+		end)
+		Airflow:Notify("outlaw.dev", "Pulse fired", 2)
+	end,
+})
+BlockTab:CreateSection("Diagnostics")
+BlockTab:CreateButton({
+	Name = "Check Status",
+	Callback = function()
+		local bp  = LP:FindFirstChild("Backpack")
+		local inp = bp and bp:FindFirstChild("Input")
+		local n = 0
+		for _ in pairs(hooked) do n += 1 end
+		local live = workspace:FindFirstChild("Live")
+		local lc = live and #live:GetChildren() or 0
+		local tcount = 0
+		for _ in pairs(animTimings) do tcount += 1 end
+		Airflow:Notify("outlaw.dev",
+			(inp and "Input OK" or "Input missing")
+			.. " | Hooked: " .. n
+			.. " | Live: " .. lc
+			.. " | Timed anims: " .. tcount, 5)
+	end,
+})
+
+TradeTab:CreateSection("M1 Trade")
+TradeTab:CreateToggle({
+	Name = "M1 Trade",
+	Description = "Fires exactly 2 M1 hits per detected attack anim. Does not gate block.",
+	CurrentValue = false,
+	Flag = "MT_On",
+	Callback = function(v)
+		State.trade = v
+		if v then
+			startHooks()
+		elseif not State.autoBlock and not State.headRide and not State.farm then
+			stopHooks()
+		end
+	end,
+})
+TradeTab:CreateSlider({
+	Name = "Fallback Delay After Block",
+	Range = { 0, 1 },
+	Increment = 0.01,
+	Suffix = "s",
+	CurrentValue = 0.04,
+	Flag = "MT_Delay",
+	Callback = function(v) State.tradeDelay = v end,
+})
+TradeTab:CreateSlider({
+	Name = "Trade Window (s)",
+	Description = "Minimum gap between trade bursts.",
+	Range = { 0, 0.5 },
+	Increment = 0.005,
+	Suffix = "s",
+	CurrentValue = 0.05,
+	Flag = "MT_Window",
+	Callback = function(v) State.tradeWindow = v end,
+})
+TradeTab:CreateSlider({
+	Name = "Hits Per Attack",
+	Description = "How many M1s to fire after each detected attack anim. 2 = double tap.",
+	Range = { 1, 5 },
+	Increment = 1,
+	CurrentValue = 2,
+	Flag = "MT_Hits",
+	Callback = function(v) State.tradeHits = v end,
+})
+TradeTab:CreateSlider({
+	Name = "Hit Gap (s)",
+	Description = "Delay between trade M1s.",
+	Range = { 0.05, 0.5 },
+	Increment = 0.01,
+	Suffix = "s",
+	CurrentValue = 0.12,
+	Flag = "MT_HitGap",
+	Callback = function(v) State.tradeHitGap = v end,
+})
+TradeTab:CreateSection("Manual Test")
+TradeTab:CreateButton({
+	Name = "Test Fire M1",
+	Callback = function()
+		if not getInput() then return Airflow:Notify("outlaw.dev", "Input not found", 3) end
+		fireM1()
+		Airflow:Notify("outlaw.dev", "M1 fired", 2)
+	end,
+})
+TradeTab:CreateButton({
+	Name = "Test Trade Now",
+	Callback = function()
+		State.lastTradeAt = 0
+		onAttack(nil)
+		Airflow:Notify("outlaw.dev", "Trade triggered", 3)
+	end,
+})
+TradeTab:CreateButton({
+	Name = "Force Reset Trade Lock",
+	Callback = function()
+		State.lastTradeAt = 0
+		Airflow:Notify("outlaw.dev", "Trade lock reset", 2)
+	end,
+})
+
+HeadRideTab:CreateSection("Head Ride")
+HeadRideTab:CreateToggle({
+	Name = "Auto Head Ride",
+	Description = "When your finisher HITS an enemy, glides above them and drops off",
+	CurrentValue = false,
+	Flag = "HR_On",
+	Callback = function(v)
+		State.headRide = v
+		if v then
+			startHooks()
+			hookMyAnimator()
+		else
+			stopHeadRide()
+			if State.myAnimConn then
+				pcall(function() State.myAnimConn:Disconnect() end)
+				State.myAnimConn = nil
+			end
+			if not State.autoBlock and not State.trade and not State.farm then
+				stopHooks()
+			end
+		end
+	end,
+})
+HeadRideTab:CreateSlider({
+	Name = "Head Offset",
+	Range = { -2, 10 },
+	Increment = 0.1,
+	CurrentValue = 3,
+	Flag = "HR_Offset",
+	Callback = function(v) State.headRideOffset = v end,
+})
+HeadRideTab:CreateSlider({
+	Name = "Smoothness (time constant)",
+	Range = { 0.05, 1 },
+	Increment = 0.05,
+	CurrentValue = 0.35,
+	Flag = "HR_Alpha",
+	Callback = function(v) State.headRideAlpha = v end,
+})
+HeadRideTab:CreateSlider({
+	Name = "Ride Duration (s)",
+	Range = { 0.2, 5 },
+	Increment = 0.1,
+	Suffix = "s",
+	CurrentValue = 1.5,
+	Flag = "HR_Duration",
+	Callback = function(v) State.headRideDur = v end,
+})
+HeadRideTab:CreateSection("Manual Test")
+HeadRideTab:CreateButton({
+	Name = "Test Head Ride Nearest",
+	Callback = function()
+		local hum = next(hooked)
+		if not hum then return Airflow:Notify("outlaw.dev", "No tracked enemies", 3) end
+		State.headRide = true
+		startHeadRide(hum)
+		Airflow:Notify("outlaw.dev", "Head ride on", 2)
+	end,
+})
+HeadRideTab:CreateButton({
+	Name = "Stop Head Ride",
+	Callback = function()
+		stopHeadRide()
+		Airflow:Notify("outlaw.dev", "Head ride stopped", 2)
+	end,
+})
+
+NanamiTab:CreateSection("Auto Nanami")
+NanamiTab:CreateToggle({
+	Name = "Auto Nanami Black Flash",
+	Description = "Clicks the instant the Nanami cutter lines up with the goal",
+	CurrentValue = false,
+	Flag = "NA_On",
+	Callback = function(v)
+		State.nanami = v
+		if v then
+			State.nanamiFired = false
+			bindNanamiChar(LP.Character)
+			if State.nanamiConn then State.nanamiConn:Disconnect() end
+			State.nanamiConn = RunService.PreRender:Connect(nanamiTick)
+		else
+			if State.nanamiConn then State.nanamiConn:Disconnect() State.nanamiConn = nil end
+		end
+	end,
+})
+NanamiTab:CreateInput({
+	Name = "Alignment Tolerance",
+	CurrentValue = "0.005",
+	PlaceholderText = "0.005",
+	Flag = "NA_Tol",
+	Callback = function(v)
+		local n = tonumber(v)
+		if n and n > 0 then State.nanamiTol = n end
+	end,
+})
+NanamiTab:CreateSection("Manual Test")
+NanamiTab:CreateButton({
+	Name = "Test Click",
+	Callback = function()
+		virtualClick()
+		Airflow:Notify("outlaw.dev", "Click fired", 2)
+	end,
+})
+NanamiTab:CreateButton({
+	Name = "Test Check Bar",
+	Callback = function()
+		local cut, goal = findBar()
+		if not cut or not goal then return Airflow:Notify("outlaw.dev", "Bar not found", 3) end
+		Airflow:Notify("outlaw.dev", string.format(
+			"Cutter %.4f | Goal %.4f | Diff %.4f",
+			cut.Position.X.Scale, goal.Position.X.Scale,
+			math.abs(cut.Position.X.Scale - goal.Position.X.Scale)), 5)
+	end,
+})
+NanamiTab:CreateButton({
+	Name = "Reset Fired Latch",
+	Callback = function()
+		State.nanamiFired = false
+		Airflow:Notify("outlaw.dev", "Latch reset", 2)
+	end,
+})
+
+YujiTab:CreateSection("Auto Yuji")
+YujiTab:CreateToggle({
+	Name = "Auto Black Flash",
+	Description = "Fires your chosen attack on the FOV window and when you press 2",
+	CurrentValue = false,
+	Flag = "YU_On",
+	Callback = function(v)
+		State.yuji = v
+		if v then
+			State.yujiChanged = false
+			State.yujiFired = false
+			if State.yujiConn then State.yujiConn:Disconnect() end
+			State.yujiConn = RunService.RenderStepped:Connect(yujiTick)
+			hookYujiKey()
+		else
+			if State.yujiConn then State.yujiConn:Disconnect() State.yujiConn = nil end
+			if State.yujiKeyConn then
+				pcall(function() State.yujiKeyConn:Disconnect() end)
+				State.yujiKeyConn = nil
+			end
+		end
+	end,
+})
+YujiTab:CreateDropdown({
+	Name = "Attack Type",
+	Options = { "Virtual Attack", "In-Game M1", "UseMove Remote" },
+	CurrentOption = "Virtual Attack",
+	Flag = "YU_Mode",
+	Callback = function(v) State.yujiMode = v end,
+})
+YujiTab:CreateSlider({
+	Name = "Key Delay (s)",
+	Range = { 0, 2 },
+	Increment = 0.05,
+	Suffix = "s",
+	CurrentValue = 0.6,
+	Flag = "YU_Delay",
+	Callback = function(v) State.yujiKeyDelay = v end,
+})
+YujiTab:CreateInput({
+	Name = "FOV Threshold",
+	CurrentValue = "43.3",
+	PlaceholderText = "43.3",
+	Flag = "YU_Threshold",
+	Callback = function(v)
+		local n = tonumber(v)
+		if n and n > 0 then State.yujiThreshold = n end
+	end,
+})
+YujiTab:CreateInput({
+	Name = "FOV Enter",
+	CurrentValue = "40",
+	PlaceholderText = "40",
+	Flag = "YU_Enter",
+	Callback = function(v)
+		local n = tonumber(v)
+		if n and n > 0 then State.yujiEnter = n end
+	end,
+})
+YujiTab:CreateInput({
+	Name = "FOV Reset",
+	CurrentValue = "50",
+	PlaceholderText = "50",
+	Flag = "YU_Reset",
+	Callback = function(v)
+		local n = tonumber(v)
+		if n and n > 0 then State.yujiReset = n end
+	end,
+})
+YujiTab:CreateSection("Manual Test")
+YujiTab:CreateButton({
+	Name = "Test Fire (Current Mode)",
+	Callback = function()
+		fireSkillByMode()
+		Airflow:Notify("outlaw.dev", "Fired: " .. State.yujiMode, 2)
+	end,
+})
+YujiTab:CreateButton({
+	Name = "Check Current FOV",
+	Callback = function()
+		local cam = workspace.CurrentCamera
+		if not cam then return Airflow:Notify("outlaw.dev", "No camera", 3) end
+		Airflow:Notify("outlaw.dev", string.format(
+			"FOV %.2f | changed %s | fired %s | mode %s",
+			cam.FieldOfView, tostring(State.yujiChanged),
+			tostring(State.yujiFired), State.yujiMode), 5)
+	end,
+})
+
+BlockBuilderTab:CreateSection("Block Builder")
+BlockBuilderTab:CreateToggle({
+	Name = "Show Block Builder Window",
+	Description = "Logs enemy animations in range. Click a row to preview.",
+	CurrentValue = true,
+	Flag = "IL_Show",
+	Callback = function(v)
+		if Logger.win then Logger.win.Visible = v end
+		if getgenv().OutlawLoggerReopen then getgenv().OutlawLoggerReopen.Visible = not v end
+	end,
+})
+BlockBuilderTab:CreateSection("Log Range")
+local ilRangeLbl = BlockBuilderTab:CreateLabel("Range: " .. Logger.range)
+BlockBuilderTab:CreateButton({
+	Name = "Range -20",
+	Callback = function()
+		Logger.range = math.max(20, Logger.range - 20)
+		ilRangeLbl:Set("Range: " .. Logger.range)
+	end,
+})
+BlockBuilderTab:CreateButton({
+	Name = "Range +20",
+	Callback = function()
+		Logger.range = math.min(500, Logger.range + 20)
+		ilRangeLbl:Set("Range: " .. Logger.range)
+	end,
+})
+BlockBuilderTab:CreateSection("Actions")
+BlockBuilderTab:CreateButton({
+	Name = "Clear Block Builder",
+	Callback = function()
+		for _, r in ipairs(Logger.rows) do
+			if r and r.Parent then r:Destroy() end
+		end
+		Logger.rows = {}
+		if Logger.title then Logger.title.Text = "Block Builder     0 Entries" end
+	end,
+})
+BlockBuilderTab:CreateLabel("Green dot = timing saved. Grey dot = new.")
+
+MyLoggerTab:CreateSection("Player Block Builder")
+MyLoggerTab:CreateToggle({
+	Name = "Show Player Block Builder Window",
+	Description = "Logs only your own animations. Click a row to preview.",
+	CurrentValue = true,
+	Flag = "ML_Show",
+	Callback = function(v)
+		if MyLogger.win then MyLogger.win.Visible = v end
+		if getgenv().OutlawMyLoggerReopen then getgenv().OutlawMyLoggerReopen.Visible = not v end
+	end,
+})
+MyLoggerTab:CreateToggle({
+	Name = "Filter Locomotion",
+	Description = "Skip walk/run/jump/idle/swim/climb anims",
+	CurrentValue = true,
+	Flag = "ML_FilterLoco",
+	Callback = function(v) getgenv().OutlawFilterLoco = v end,
+})
+MyLoggerTab:CreateToggle({
+	Name = "Include Locomotion",
+	Description = "Log locomotion too (overrides filter)",
+	CurrentValue = false,
+	Flag = "ML_IncludeLoco",
+	Callback = function(v) getgenv().OutlawIncludeLoco = v end,
+})
+MyLoggerTab:CreateSection("Log Range")
+local mlRangeLbl = MyLoggerTab:CreateLabel("Range: " .. MyLogger.range)
+MyLoggerTab:CreateButton({
+	Name = "Range -20",
+	Callback = function()
+		MyLogger.range = math.max(20, MyLogger.range - 20)
+		mlRangeLbl:Set("Range: " .. MyLogger.range)
+	end,
+})
+MyLoggerTab:CreateButton({
+	Name = "Range +20",
+	Callback = function()
+		MyLogger.range = math.min(500, MyLogger.range + 20)
+		mlRangeLbl:Set("Range: " .. MyLogger.range)
+	end,
+})
+MyLoggerTab:CreateSection("Actions")
+MyLoggerTab:CreateButton({
+	Name = "Clear Player Block Builder",
+	Callback = function()
+		if getgenv().OutlawMyLoggerClear then getgenv().OutlawMyLoggerClear() end
+	end,
+})
+MyLoggerTab:CreateLabel("Green dot = timing saved. Grey dot = new.")
+
+getgenv().OutlawFilterLoco  = true
+getgenv().OutlawIncludeLoco = false
+
+VisTab:CreateSection("Visualizer")
+VisTab:CreateToggle({
+	Name = "Show Visualizer Window",
+	CurrentValue = true,
+	Flag = "VS_Show",
+	Callback = function(v)
+		if Visualizer.frame then Visualizer.frame.Visible = v end
+	end,
+})
+VisTab:CreateSection("How to save per-anim timing")
+VisTab:CreateLabel("1. Click a row in either logger.")
+VisTab:CreateLabel("2. Scrub to the frame you want.")
+VisTab:CreateLabel("3. Save Block Time and/or Save Trade Time.")
+VisTab:CreateLabel("Badge shows NEW / SAVED / PARTIAL for the loaded anim.")
+VisTab:CreateSection("Persistence")
+VisTab:CreateLabel("Saved to outlaw_anim_timings.json. Auto-loads on inject.")
+VisTab:CreateLabel("Survives rejoin, server hop, and game switch on the same executor.")
+VisTab:CreateButton({
+	Name = "Clear ALL Saved Timings",
+	Callback = function()
+		animTimings = {}
+		saveTimings()
+		refreshRowDots()
+		Airflow:Notify("outlaw.dev", "All anim timings cleared", 3)
+	end,
+})
+
+PlayerTab:CreateSection("Movement")
+PlayerTab:CreateToggle({
+	Name = "Speedhack",
+	CurrentValue = false,
+	Flag = "PL_Speed",
+	Callback = function(v)
+		State.speed = v
+		if State.speedConn then State.speedConn:Disconnect() State.speedConn = nil end
+		if not v then return end
+		State.speedConn = RunService.Heartbeat:Connect(function()
+			local c = LP.Character
+			local hrp = c and c:FindFirstChild("HumanoidRootPart")
+			local h = c and c:FindFirstChildOfClass("Humanoid")
+			if not hrp or not h or State.fly then return end
+			if h.MoveDirection.Magnitude > 0 then
+				hrp.Velocity = h.MoveDirection.Unit * State.speedVal + Vector3.new(0, hrp.Velocity.Y, 0)
+			end
+		end)
+	end,
+})
+PlayerTab:CreateSlider({
+	Name = "Speed",
+	Range = { 16, 300 },
+	Increment = 1,
+	CurrentValue = 64,
+	Flag = "PL_SpeedVal",
+	Callback = function(v) State.speedVal = v end,
+})
+PlayerTab:CreateToggle({
+	Name = "Flyhack",
+	CurrentValue = false,
+	Flag = "PL_Fly",
+	Callback = function(v)
+		State.fly = v
+		if State.flyBV then pcall(function() State.flyBV:Destroy() end) State.flyBV = nil end
+		if State.flyConn then State.flyConn:Disconnect() State.flyConn = nil end
+		if not v then return end
+
+		local c = LP.Character
+		local hrp = c and c:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+		bv.Parent = hrp
+		State.flyBV = bv
+
+		State.flyConn = RunService.Heartbeat:Connect(function()
+			local ch = LP.Character
+			local h = ch and ch:FindFirstChildOfClass("Humanoid")
+			if not h or not bv.Parent then return end
+			bv.Velocity = workspace.CurrentCamera.CFrame:VectorToWorldSpace(h.MoveDirection) * State.flyVal
+		end)
+	end,
+})
+PlayerTab:CreateSlider({
+	Name = "Fly Speed",
+	Range = { 16, 500 },
+	Increment = 1,
+	CurrentValue = 100,
+	Flag = "PL_FlyVal",
+	Callback = function(v) State.flyVal = v end,
+})
+PlayerTab:CreateToggle({
+	Name = "Infinite Jump",
+	CurrentValue = false,
+	Flag = "PL_Jump",
+	Callback = function(v)
+		State.infJump = v
+		if State.infJumpConn then State.infJumpConn:Disconnect() State.infJumpConn = nil end
+		if not v then return end
+
+		State.infJumpConn = UserInputService.InputBegan:Connect(function(input, gp)
+			if gp or input.KeyCode ~= Enum.KeyCode.Space then return end
+			local c = LP.Character
+			local hrp = c and c:FindFirstChild("HumanoidRootPart")
+			if not hrp then return end
+			task.wait()
+			local bv = hrp:FindFirstChildWhichIsA("BodyVelocity") or Instance.new("BodyVelocity", hrp)
+			bv.Velocity = Vector3.new(0, State.infJumpPower, 0)
+			bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+			Debris:AddItem(bv, 0.2)
+		end)
+	end,
+})
+PlayerTab:CreateSlider({
+	Name = "Jump Power",
+	Range = { 10, 200 },
+	Increment = 1,
+	CurrentValue = 50,
+	Flag = "PL_JumpPow",
+	Callback = function(v) State.infJumpPower = v end,
+})
+PlayerTab:CreateSection("Character Lock")
+PlayerTab:CreateToggle({
+	Name = "Character Lock",
+	CurrentValue = false,
+	Flag = "PL_Lock",
+	Callback = function(v)
+		State.lock = v
+		if State.lockConn and not v and not State.farm then
+			State.lockConn:Disconnect()
+			State.lockConn = nil
+		end
+		if v and not State.lockConn then
+			State.lockConn = RunService.RenderStepped:Connect(lockTick)
+		end
+	end,
+})
+PlayerTab:CreateSlider({
+	Name = "Lock Range",
+	Range = { 5, 200 },
+	Increment = 1,
+	CurrentValue = 50,
+	Flag = "PL_LockRange",
+	Callback = function(v) State.lockRange = v end,
+})
+
+MiscTab:CreateSection("Server")
+MiscTab:CreateButton({
+	Name = "Rejoin",
+	Callback = doRejoin,
+})
+MiscTab:CreateButton({
+	Name = "Server Hop",
+	Callback = doServerHop,
+})
+MiscTab:CreateButton({
+	Name = "Join Lowest Server",
+	Callback = doJoinLowest,
+})
+MiscTab:CreateToggle({
+	Name = "Auto Rejoin",
+	CurrentValue = false,
+	Flag = "MS_AutoRejoin",
+	Callback = function(v)
+		State.autoRejoin = v
+		hookAutoRejoin()
+	end,
+})
+MiscTab:CreateSection("Info")
+MiscTab:CreateLabel("Server Hop picks any available server.")
+MiscTab:CreateLabel("Join Lowest picks the one with the fewest players.")
+MiscTab:CreateLabel("Auto Rejoin watches for teleport and rejoins.")
+
+SettingsTab:CreateSection("Menu")
+SettingsTab:CreateButton({
+	Name = "Unload",
+	Callback = function()
+		pcall(function() Airflow:Destroy() end)
+		if Logger.win and Logger.win.Parent then
+			pcall(function() Logger.win.Parent:Destroy() end)
+		end
+		if MyLogger.win and MyLogger.win.Parent then
+			pcall(function() MyLogger.win.Parent:Destroy() end)
+		end
+		if Visualizer.gui and Visualizer.gui.Parent then
+			pcall(function() Visualizer.gui:Destroy() end)
+		end
+	end,
+})
+
+loadTimings()
+
+task.spawn(function()
+	task.wait(1.2)
+	buildLogger()
+	buildMyLogger()
+	buildVisualizer()
+
+	hookContainer(workspace:FindFirstChild("Live"))
+	hookContainer(workspace:FindFirstChild("Players"))
+
+	local live = workspace:FindFirstChild("Live")
+	if live then
+		live.ChildAdded:Connect(function(c)
+			if c:IsA("Model") then
+				local h = c:FindFirstChildOfClass("Humanoid")
+				if h then hookLog(h) end
+			end
+		end)
+	end
+
+	local p = workspace:FindFirstChild("Players")
+	if p then
+		p.ChildAdded:Connect(function(c)
+			if c:IsA("Model") then
+				local h = c:FindFirstChildOfClass("Humanoid")
+				if h then hookLog(h) end
+			end
+		end)
+	end
+
+	workspace.DescendantAdded:Connect(function(o)
+		if o:IsA("Humanoid") then hookLog(o) end
+	end)
+
+	bindMyLoggerChar(LP.Character)
+	LP.CharacterAdded:Connect(function(char)
+		task.wait(0.5)
+		bindMyLoggerChar(char)
+	end)
+end)
+
+scanAll()
+
+local bootLive = workspace:FindFirstChild("Live")
+if bootLive then
+	bootLive.ChildAdded:Connect(function(c)
+		if c:IsA("Model") then
+			local h = c:FindFirstChildOfClass("Humanoid")
+			if h then hookHumanoid(h) end
+		end
+	end)
+end
+
+workspace.DescendantAdded:Connect(function(o)
+	if o:IsA("Humanoid") then
+		local mc = LP.Character
+		if not (o.Parent and mc and o.Parent == mc) then hookHumanoid(o) end
+	elseif o:IsA("Animator") then
+		local h = o.Parent
+		if h and h:IsA("Humanoid") then hookHumanoid(h) end
+	end
+end)
+
+Players.PlayerAdded:Connect(function(plr)
+	plr.CharacterAdded:Connect(function(c)
+		local h = c:WaitForChild("Humanoid", 5)
+		if h then hookHumanoid(h) end
+	end)
+end)
+
+LP.CharacterAdded:Connect(function()
+	task.wait(1)
+	if State.headRide then hookMyAnimator() end
+end)
+
+Airflow:Notify("outlaw.dev", "Loaded. M1 Trade = 2 hits per attack. Block independent.", 5)
